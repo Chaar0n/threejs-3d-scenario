@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - FBX loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+
+	<body>
+
+		<!-- Información y créditos -->
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - FBXLoader<br />
+			Character and animation from <a href="https://www.mixamo.com/" target="_blank" rel="noopener">Mixamo</a>
+		</div>
+        <!-- Importacion para modularización -->
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+            /* Importación de módulos de three.js y otros complementos */
+			import * as THREE from 'three';
+
+			import Stats from 'three/addons/libs/stats.module.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			// Complementos adicionales: Carga de HDR y audio ---------------------------------------------------------------------
+			import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+			import { Audio, AudioListener, AudioLoader } from 'three';
+			
+			// Variables globales para escena, cámara, renderizador y otros componentes ---------------------------------------------------------------------
+			const manager = new THREE.LoadingManager(); // Control de carga
+
+			let camera, scene, renderer, stats, object, loader, guiMorphsFolder;
+			let mixer; // Mezclador de animaciones
+
+			const clock = new THREE.Clock(); // Control del tiempo
+
+			const params = {
+				asset: 'Flair'
+			}; // Parámetro para elegir el modelo
+
+			const assets = [
+				'Flair',
+				'morph_test'
+			]; // Modelos disponibles
+
+            // Inicialización de la escena
+			init();
+
+			function init() {
+                // Crear contenedor y añadirlo al documento
+				const container = document.createElement( 'div' );
+				document.body.appendChild( container );
+                // Configuración de la cámara
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+				camera.position.set( 100, 200, 300 );
+                // Creación de la escena
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0xa0a0a0 );
+				scene.fog = new THREE.Fog( 0xa0a0a0, 200, 1000 );
+                // Luces: hemisférica y direccional
+				const hemiLight = new THREE.HemisphereLight( 0xffffff, 0x444444, 5 );
+				hemiLight.position.set( 0, 200, 0 );
+				scene.add( hemiLight );
+
+				const dirLight = new THREE.DirectionalLight( 0xffffff, 5 );
+				dirLight.position.set( 0, 200, 100 );
+				dirLight.castShadow = true;
+				dirLight.shadow.camera.top = 180;
+				dirLight.shadow.camera.bottom = - 100;
+				dirLight.shadow.camera.left = - 120;
+				dirLight.shadow.camera.right = 120;
+				scene.add( dirLight );
+
+				// scene.add( new THREE.CameraHelper( dirLight.shadow.camera ) );
+
+				// ground, plano del suelo
+				const mesh = new THREE.Mesh( new THREE.PlaneGeometry( 2000, 2000 ), new THREE.MeshPhongMaterial( { color: 0x999999, depthWrite: false } ) );
+				mesh.rotation.x = - Math.PI / 2;
+				mesh.receiveShadow = true;
+				scene.add( mesh );
+                // Grilla del suelo 
+				const grid = new THREE.GridHelper( 2000, 20, 0x000000, 0x000000 );
+				grid.material.opacity = 0.2;
+				grid.material.transparent = true;
+				scene.add( grid );
+			    // Configuración del cargador FBX y carga inicial
+				loader = new FBXLoader( manager );
+				loadAsset( params.asset );
+                // Configuración del renderizador
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				container.appendChild( renderer.domElement );
+                // Controles de órbita
+				const controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 100, 0 );
+				controls.update();
+                // Evento para ajustar la ventana al redimensionar
+				window.addEventListener( 'resize', onWindowResize );
+
+				// stats, Estadísticas de rendimiento
+				stats = new Stats();
+				container.appendChild( stats.dom );
+                // GUI para seleccionar modelos y configuraciones
+				const gui = new GUI();
+				gui.add( params, 'asset', assets ).onChange( function ( value ) {
+
+					loadAsset( value );
+
+				} );
+
+				guiMorphsFolder = gui.addFolder( 'Morphs' ).hide();
+
+// Bloque para cargar un escenario HDR
+				// Carga de HDR para iluminación ambiental --------------------------------------------------------------
+				const rgbeLoader = new RGBELoader();
+                rgbeLoader.load('models/rgbe/blue_hour_8k.hdr', function (texture) {
+                    texture.mapping = THREE.EquirectangularReflectionMapping; // Mapeo para reflejos
+                    scene.background = texture; // Fondo del escenario
+                    scene.environment = texture; // Iluminación ambiental del escenario
+                });
+// Configuración de audio
+				const listener = new AudioListener();
+				camera.add(listener); // Añadir el listener a la cámara
+
+				const sound = new Audio(listener); // Crear un objeto de audio asociado al listener
+				const audioLoader = new AudioLoader();
+				audioLoader.load('models/rgbe/Snow-Informer.mp3', function (buffer) {
+					console.log("Audio cargado exitosamente");
+					sound.setBuffer(buffer);  // Asignar el buffer cargado al audio
+                    sound.setLoop(true);      // Habilitar bucle para música continua
+                    sound.setVolume(0.5);     // Establecer volumen
+                    sound.play();             // Reproducir la música
+				});
+				// --------------------------------------------------------------
+
+			}
+            // Función para cargar y actualizar modelos
+			function loadAsset( asset ) {
+
+				loader.load( 'models/fbx/' + asset + '.fbx', function ( group ) {
+                    // Limpiar modelo anterior
+					if ( object ) {
+                        
+						object.traverse( function ( child ) {
+
+							if ( child.material ) {
+
+								const materials = Array.isArray( child.material ) ? child.material : [ child.material ];
+								materials.forEach( material => {
+
+									if ( material.map ) material.map.dispose();
+									material.dispose();
+			
+								} );
+			
+							}
+			
+							if ( child.geometry ) child.geometry.dispose();
+
+						} );
+
+						scene.remove( object );
+
+					}
+
+					// Añadir el nuevo modelo
+					object = group;
+                    // Configurar animaciones si están disponibles
+					if ( object.animations && object.animations.length ) {
+
+						mixer = new THREE.AnimationMixer( object );
+
+						const action = mixer.clipAction( object.animations[ 0 ] );
+						action.play();
+
+					} else {
+
+						mixer = null;
+
+					}
+                    // Configurar morphs en la GUI
+					guiMorphsFolder.children.forEach( ( child ) => child.destroy() );
+					guiMorphsFolder.hide();
+
+					object.traverse( function ( child ) {
+
+						if ( child.isMesh ) {
+
+// Aplicar material personalizado, con textura personalizada al modelo FBX-----------------------------------------------------------
+							// Aplicar un material de agua o translúcido al modelo
+							child.material = new THREE.MeshStandardMaterial({
+								color: 0xff3300,    // Color base (rojo)
+                                transparent: true, // Habilitar transparencia
+                                opacity: 0.9,      // Nivel de opacidad
+                                roughness: 0.5,    // Rugosidad del material
+                                metalness: 0.7     // Propiedad metálica
+							});
+							// -----------------------------------------------------------
+
+							child.castShadow = true; // Permitir que el modelo proyecte sombras
+							child.receiveShadow = true; // Permitir que el modelo reciba sombras
+                            // Configurar morphs si existen
+							if ( child.morphTargetDictionary ) {
+
+								guiMorphsFolder.show();
+								const meshFolder = guiMorphsFolder.addFolder( child.name || child.uuid );
+								Object.keys( child.morphTargetDictionary ).forEach( ( key ) => {
+			
+									meshFolder.add( child.morphTargetInfluences, child.morphTargetDictionary[ key ], 0, 1, 0.01 );
+			
+								} );
+			
+							}
+
+						}
+
+					} );
+
+					scene.add( object );
+
+				} );
+
+			}
+            // Ajustar cámara y renderizador al redimensionar
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+            // Animación principal
+			function animate() {
+
+				const delta = clock.getDelta(); // Tiempo desde el último frame
+
+				if ( mixer ) mixer.update( delta ); // Actualizar animaciones
+
+				renderer.render( scene, camera ); // Renderizar la escena
+
+				stats.update(); // Actualizar estadísticas
+
+			}
+
+		</script>
+
+
+	</body>
+</html>
+
+
+<!--
+Escenario HDR: Configurado con RGBELoader y aplicado a scene.background y scene.environment.
+Textura para modelo FBX: Asignada mediante MeshStandardMaterial en cada malla del modelo.
+Música de fondo: Integrada con Audio y AudioLoader, asociada a la cámara con AudioListener 
+-->
